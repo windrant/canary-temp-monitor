@@ -58,10 +58,10 @@ def alarmcheck(data):
     return [statuscode, statusmess]
 
 def notify(data,mode,status):
-    if sms == 1 and (mode == 'sms' or mode == 'all'):
+    if sms == '1' and (mode == 'sms' or mode == 'all'):
         for number in phones:
             onering.textbelt(number,key,data)
-    if slack == 1 and (mode == 'slack' or mode == 'all'):
+    if slack == '1' and (mode == 'slack' or mode == 'all'):
         if status == 'alarm':
             for channel in hooks:
                 username = "Canary2"
@@ -70,6 +70,7 @@ def notify(data,mode,status):
         else:
             username = "Canary2"
             emoji = ":imp:"
+            print(hooks[1])
             onering.slackpost(username,emoji,data,hooks[1])
 
 def logrotate(logfile):
@@ -107,12 +108,15 @@ def loadsettings():
     alarmchannel = config.get('notification','alarmchannel')
     logchannel = config.get('notification','logchannel')
     hooks = [alarmchannel,logchannel]
+    logfreq =config.get('notification','logfreq')
 
 if __name__ == "__main__":
     #Config settings
     loadsettings()
     hour = round(3600 / poll,0)
     quarter = round(hour / 4,0)
+    sixhour = hour * 6
+    twelvehour = hour * 12
     day = hour * 24
 
     #Init varibles
@@ -143,6 +147,12 @@ if __name__ == "__main__":
                 notify(data,'all','alarm')
         if timer%hour == 0:
             hourdata = prepdata(sensordata,hour)
+            notify(data,'slack','log')
+        if timer%(sixhour) == 0:
+            hourdata = prepdata(sensordata,sixhour)
+            notify(data,'slack','log')
+        if timer%(twelvehour) == 0:
+            hourdata = prepdata(sensordata,twelvehour)
             notify(data,'slack','log')
         if timer%day == 0:
             timer = 0
