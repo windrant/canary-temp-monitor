@@ -82,7 +82,7 @@ def logrotate(logfile):
 def loadsettings():
     config = configparser.ConfigParser()
     config.read('/var/www/dokuwiki/data/pages/settings.txt')
-    global poll, logfile, loglength, bounds, sms, key, slack, hooks
+    global poll, logfile, loglength, bounds, sms, key, slack, hooks, logfreq
     poll = int(config.get('basics','poll'))
     logfile = config.get('basics','logfile')
     loglength = int(config.get('basics','loglength'))
@@ -146,14 +146,17 @@ if __name__ == "__main__":
             if alarmstatus[0] == 1:
                 notify(data,'all','alarm')
         if timer%hour == 0:
-            hourdata = prepdata(sensordata,hour)
-            notify(data,'slack','log')
-        if timer%(sixhour) == 0:
-            hourdata = prepdata(sensordata,sixhour)
-            notify(data,'slack','log')
-        if timer%(twelvehour) == 0:
-            hourdata = prepdata(sensordata,twelvehour)
-            notify(data,'slack','log')
+            if logfreq == "1hour":
+                hourdata = prepdata(sensordata,hour)
+                notify(data,'slack','log')
+        if timer%sixhour == 0:
+            if logfreq == "6hour":
+                hourdata = prepdata(sensordata,sixhour)
+                notify(data,'slack','log')
+        if timer%twelvehour == 0:
+            if twelvehour == "12hour":
+                hourdata = prepdata(sensordata,twelvehour)
+                notify(data,'slack','log')
         if timer%day == 0:
             timer = 0
             sensordata = []
