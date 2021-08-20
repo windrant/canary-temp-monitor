@@ -4,9 +4,14 @@ import requests
 import json
 import socket
 import os
-#import configparser
+from datetime import datetime
 
-def slackpost(username,emoji,message,url):
+def get_current_datetime():
+    now = datetime.now()
+    dt_string = now.strftime("%Y-%m-%d %I:%M:%S %p")
+    return dt_string
+
+def post_to_slack(username,emoji,message,url):
     slack_data = {'username': username,
         'icon_emoji': emoji,
         'text': message
@@ -18,7 +23,7 @@ def slackpost(username,emoji,message,url):
     )
     return response
 
-def textbelt(phone,key,message):
+def post_to_sms(phone,key,message):
     textbelt_data = {
         "phone": phone,
         "message": message,
@@ -29,7 +34,7 @@ def textbelt(phone,key,message):
         textbelt_data)
     return response
 
-def textbelt_quota(key):
+def get_textbelt_quota(key):
     response = requests.get(
         "https://textbelt.com/quota/" + key
     )
@@ -37,7 +42,7 @@ def textbelt_quota(key):
     quota = info.get("quotaRemaining")
     return quota
 
-def readfile(file):
+def read_file(file):
     if os.path.exists(file):
         f = open(file, "r")
         lines = f.read().splitlines()
@@ -46,13 +51,13 @@ def readfile(file):
         lines=[]
     return lines
 
-def writefile(data,file):
+def write_file(data,file):
     f = open(file, "w")
     for l in data:
         f.write("{}\n".format(l))
     f.close()
 
-def addline(data,file):
+def add_line(data,file):
     f = open(file, "a")
     f.write(data)
     f.close()
