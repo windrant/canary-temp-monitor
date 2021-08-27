@@ -5,158 +5,188 @@
 import time
 import board
 import adafruit_sht31d
-from datetime import datetime
 import onering
 import configparser
+import RPi.GPIO as GPIO
 
-def datestamp():
-    now = datetime.now()
-    dt_string = now.strftime("%Y-%m-%d %H:%M:%S")
-    return dt_string
-
-def sensorpoll():
+def sensor_reading(sensor, use_water_sensor):
     tempc = sensor.temperature
     temp = round((tempc * 1.8) + 32,1)
     humid = round(sensor.relative_humidity,1)
-    dt_string = datestamp()
+    datetime_string = onering.get_current_datetime()
+    wet = 0
+    if use_water_sensor == "1":
+        if GPIO.input(22) > 0:
+            wet = 1
     sensor.heater = True
     time.sleep(1)
     sensor.heater = False
-    #print(f"{dt_string} {temp}F {humid}%")
-    return [dt_string, temp, humid]
+    return [datetime_string, temp, humid, wet]
 
-def prepdata(data,interval):
-    totaltemp = 0
-    totalhumid = 0
+def prepare_data(data,interval):
+    total_temp = 0
+    total_humid = 0
+    total_wet_readings = 0
     polls = 0
-    for t in reversed(data):
-        totaltemp = totaltemp + t[1]
-        totalhumid = totalhumid + t[2]
+    wet = 0
+    for reading in reversed(data):
+        total_temp = total_temp + reading[1]
+        total_humid = total_humid + reading[2]
+        total_wet_readings = total_wet_readings + reading[3]
         polls = polls + 1
         if polls == interval:
             break
-    avgtemp = round(totaltemp / polls,1)
-    avghumid = round(totalhumid / polls,1)
-    dt_string = datestamp()
-    return [dt_string, avgtemp, avghumid]
+    avg_temp = round(total_temp / polls, 1)
+    avg_humid = round(total_humid / polls, 1)
+    datetime_string = onering.get_current_datetime()
+    if total_wet_readings > 0:
+        wet = 1
+    return datetime_string, avg_temp, avg_humid, wet
 
-def alarmcheck(data):
-    statusmess = "ok"
-    statuscode = 0
-    if data[1] > bounds[0]:
-        statusmess = "Max temp exceeded"
-        statuscode = 1
-    if data[1] < bounds[1]:
-        statusmess = "Min temp exceeded"
-        statuscode = 1
-    if data[2] > bounds[2]:
-        statusmess = "Max humid exceeded"
-        statuscode = 1
-    if data[2] < bounds[3]:
-        statusmess = "Min humid exceeded"
-        statuscode = 1
-    return [statuscode, statusmess]
+def alarm_check(data, temp_max, temp_min, humid_max, humid_min):
+    status_message = "ok"
+    status_code = 0
+    if data[1] > float(temp_max):
+        status_message = "Max temp exceeded"
+        status_code = 1
+    if data[1] < float(temp_min):
+        status_message = "Min temp exceeded"
+        status_code = 1
+    if data[2] > float(humid_max):
+        status_message = "Max humid exceeded"
+        status_code = 1
+    if data[2] < float(humid_min):
+        status_message = "Min humid exceeded"
+        status_code = 1
+    if data[3] == 1:
+        status_message = "Wet!"
+        status_code = 1
+    return [status_code, status_message]
 
-def notify(data,mode,status):
-    if sms == '1' and (mode == 'sms' or mode == 'all'):
-        for number in phones:
-            onering.textbelt(number,key,data)
-    if slack == '1' and (mode == 'slack' or mode == 'all'):
-        if status == 'alarm':
-            for channel in hooks:
+def notify(display, sms_contacts, slack_contacts, mode):
+    if mode == 'alarm':
+        if len(sms_contacts) > 1:
+            for number in sms_contacts[1]:
+                onering.post_to_sms(number, sms_contacts[0], display)
+        if len(slack_contacts) > 0:
+            for channel in slack_contacts:
                 username = "Canary2"
                 emoji = ":imp:"
-                onering.slackpost(username,emoji,data,channel)
-        else:
+                onering.post_to_slack(username,emoji,display,channel)
+    else:
+        if len(slack_contacts) > 0:
             username = "Canary2"
             emoji = ":imp:"
-            print(hooks[1])
-            onering.slackpost(username,emoji,data,hooks[1])
+            onering.post_to_slack(username,emoji,display,slack_contacts[1])
 
-def logrotate(logfile):
-    logcurrent = onering.readfile(logfile)
-    while len(logcurrent) > loglength:
-        logcurrent.pop(0)
-        onering.writefile(logcurrent,logfile)
+def log_rotate(log_file, log_length):
+    current_log = onering.read_file(log_file)
+    while len(current_log) > log_length:
+        current_log.pop(0)
+        onering.write_file(current_log,log_file)
 
-def loadsettings():
+def load_settings(settings_path):
     config = configparser.ConfigParser()
-    config.read('/var/www/dokuwiki/data/pages/settings.txt')
-    global poll, logfile, loglength, bounds, sms, key, slack, hooks, logfreq
-    poll = int(config.get('basics','poll'))
-    logfile = config.get('basics','logfile')
-    loglength = int(config.get('basics','loglength'))
-    tempmax = config.get('boundaries','tempmax')
-    tempmin = config.get('boundaries','tempmin')
-    humidmax = config.get('boundaries','humidmax')
-    humidmin = config.get('boundaries','humidmin')
-    bounds = [int(tempmax),int(tempmin),int(humidmax),int(humidmin)]
-    sms = config.get('notification','sms')
-    key = config.get('notification','key')
-    phone1 = config.get('notification','phone1')
-    phone2 = config.get('notification','phone2')
-    phone3 = config.get('notification','phone3')
-    if phone1 == '':
-        phones = ['123-123-1234']
-    else:
-        phones = [phone1]
-    if phone2 != '':
-        phones.append(phone2)
-    if phone3 != '':
-        phones.append(phone3)
-    slack = config.get('notification','slack')
-    alarmchannel = config.get('notification','alarmchannel')
-    logchannel = config.get('notification','logchannel')
-    hooks = [alarmchannel,logchannel]
-    logfreq =config.get('notification','logfreq')
+    config.read(settings_path)
+    log_file = config.get('basics', 'log_file')
+    log_length = int(config.get('basics', 'log_length'))
+    use_water_sensor = config.get('basics', 'use_water_sensor')
+    temp_max = config.get('boundaries', 'temp_max')
+    temp_min = config.get('boundaries', 'temp_min')
+    humid_max = config.get('boundaries', 'humid_max')
+    humid_min = config.get('boundaries', 'humid_min')
+    use_sms = config.get('notification', 'use_sms')
+    key = config.get('notification', 'key')
+    phone1 = config.get('notification', 'phone1')
+    phone2 = config.get('notification', 'phone2')
+    phone3 = config.get('notification', 'phone3')
+    use_slack = config.get('notification','use_slack')
+    slack_alarm_channel = config.get('notification','slack_alarm_channel')
+    slack_log_channel = config.get('notification','slack_log_channel')
+    slack_log_freq = config.get('notification','slack_log_freq')
+    slack_contacts = []
+    sms_contacts = []
+    if use_slack == "1":
+        slack_contacts = slack_alarm_channel, slack_log_channel
+    if use_sms == "1":
+        sms_contacts = key, [phone1, phone2, phone3]
+    return log_file, log_length, temp_max, temp_min, humid_max, humid_min, \
+    slack_log_freq, slack_contacts, sms_contacts, key, use_water_sensor
 
 if __name__ == "__main__":
     #Config settings
-    loadsettings()
-    hour = round(3600 / poll,0)
-    quarter = round(hour / 4,0)
-    sixhour = hour * 6
-    twelvehour = hour * 12
-    day = hour * 24
+    SETTINGS_PATH = '/var/www/dokuwiki/data/pages/settings.txt'
+    log_file, log_length, temp_max, temp_min, humid_max, humid_min, \
+    slack_log_freq, slack_contacts, sms_contacts, key, \
+    use_water_sensor = load_settings(SETTINGS_PATH)
+    POLL = 59 #seconds
+    QUARTERHOUR = 15 #minutes
+    HOUR = 60 #minutes
+    SIXHOUR = 360 #minutes
+    TWELVEHOUR = 720 #minutes
+    DAY = 1440 #minutes
 
     #Init varibles
     i2c = board.I2C()
     sensor = adafruit_sht31d.SHT31D(i2c)
     timer = 0
-    sensordata = []
+    sensor_data = []
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(22, GPIO.IN)
 
     #Startup work
-    quotarem = onering.textbelt_quota(key)
-    myip = onering.whatsmyip()
-    data = "  * " + datestamp() + " :: Canary monitoring begins, " + str(quotarem) + " sms in quota remaining, logs: http://" + myip + "/start\n"
-    notify(data,'slack','log')
-    onering.addline(data,logfile)
+    quota_remaining = onering.get_textbelt_quota(key)
+    ip = onering.whatsmyip()
+    display = (f"{onering.get_current_datetime()} :: "
+                f"Canary monitoring begins, {quota_remaining}"
+                f"sms in quota remaining, logs: http://{ip}/start"
+    )
+    wiki_display = "  * " + display + "\n"
+    notify(display, sms_contacts, slack_contacts, "log")
+    onering.add_line(wiki_display, log_file)
     while True:
-        loadsettings()
-        time.sleep((poll - 1)) #Sleeping
-        results=sensorpoll() #Get data from sensor
-        sensordata.append(results) #Add result to array
+        log_file, log_length, temp_max, temp_min, humid_max, humid_min, \
+        slack_log_freq, slack_contacts, sms_contacts, key, \
+        use_water_sensor = load_settings(SETTINGS_PATH)
+        time.sleep(POLL) #Sleeping
+        results=sensor_reading(sensor, use_water_sensor) #Get data from sensor
+        sensor_data.append(results) #Add result to array
         timer = timer + 1
-        logrotate(logfile)
-        if timer%quarter == 0:
-            quarterdata = prepdata(sensordata,quarter)
-            alarmstatus = alarmcheck(quarterdata)
-            data = "  * " + quarterdata[0] + " :: " + str(quarterdata[1]) + "F " + str(quarterdata[2]) + "% " + alarmstatus[1] + "\n"
-            onering.addline(data,logfile)
-            if alarmstatus[0] == 1:
-                notify(data,'all','alarm')
-        if timer%hour == 0:
-            if logfreq == "1hour":
-                hourdata = prepdata(sensordata,hour)
-                notify(data,'slack','log')
-        if timer%sixhour == 0:
-            if logfreq == "6hour":
-                hourdata = prepdata(sensordata,sixhour)
-                notify(data,'slack','log')
-        if timer%twelvehour == 0:
-            if twelvehour == "12hour":
-                hourdata = prepdata(sensordata,twelvehour)
-                notify(data,'slack','log')
-        if timer%day == 0:
+        log_rotate(log_file, log_length)
+        if timer % QUARTERHOUR == 0:
+            quarter_data = prepare_data(sensor_data, QUARTERHOUR)
+            alarm_status = alarm_check(quarter_data, temp_max, temp_min, \
+            humid_max, humid_min)
+            display = (f"{quarter_data[0]} :: {quarter_data[1]}F "
+                        f"{quarter_data[2]}% {alarm_status[1]}"
+            )
+            wiki_display = "  * " + display + "\n"
+            onering.add_line(wiki_display, log_file)
+            if alarm_status[0] == 1:
+                notify(display, sms_contacts, slack_contacts, "alarm")
+        if timer % HOUR == 0:
+            if slack_log_freq == "1hour":
+                hour_data = prepare_data(sensor_data, HOUR)
+                display = (f"One Hour Report: {hour_data[0]} :: {hour_data[1]}F "
+                            f" {hour_data[2]}% {alarm_status[1]}"
+                )
+                notify(display, sms_contacts, slack_contacts, "log")
+        if timer % SIXHOUR == 0:
+            if slack_log_freq == "6hour":
+                six_hour_data = prepare_data(sensor_data, SIXHOUR)
+                display = (f"Six Hour Report: {six_hour_data[0]} :: "
+                            f"{six_hour_data[1]}F {six_hour_data[2]}% "
+                            f"{alarm_status[1]}"
+                )
+                notify(display, sms_contacts, slack_contacts, "log")
+        if timer % TWELVEHOUR == 0:
+            if slack_log_freq == "12hour":
+                twelve_hour_data = prepare_data(sensor_data, TWELVEHOUR)
+                display = (f"Twelve Hour Report: {twelve_hour_data[0]} :: "
+                            f"{twelve_hour_data[1]}F {twelve_hour_data[2]}% "
+                            f"{alarm_status[1]}"
+                )
+                notify(display, sms_contacts, slack_contacts, "log")
+        if timer % DAY == 0:
             timer = 0
             sensordata = []
