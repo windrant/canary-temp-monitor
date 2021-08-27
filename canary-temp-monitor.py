@@ -40,7 +40,7 @@ def prepare_data(data,interval):
     avg_humid = round(total_humid / polls, 1)
     datetime_string = onering.get_current_datetime()
     if total_wet_readings > 0:
-        wet = 1
+        wet = total_wet_readings
     return datetime_string, avg_temp, avg_humid, wet
 
 def alarm_check(data, temp_max, temp_min, humid_max, humid_min):
@@ -58,8 +58,8 @@ def alarm_check(data, temp_max, temp_min, humid_max, humid_min):
     if data[2] < float(humid_min):
         status_message = "Min humid exceeded"
         status_code = 1
-    if data[3] == 1:
-        status_message = "Wet!"
+    if data[3] > 0:
+        status_message = f"Wet! (data[3])"
         status_code = 1
     return [status_code, status_message]
 
