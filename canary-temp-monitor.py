@@ -9,19 +9,36 @@ import onering
 import configparser
 import RPi.GPIO as GPIO
 
-def sensor_reading(sensor, use_water_sensor):
+def sensor_reading(sensor, temp_distortion, humid_distortion):
     tempc = sensor.temperature
     temp = round((tempc * 1.8) + 32,1)
     humid = round(sensor.relative_humidity,1)
+    temp = temp + float(temp_distortion)
+    humid = humid + float(humid_distortion)
+    #print(f"adj temp: {temp}, adj humid: {humid}")
     datetime_string = onering.get_current_datetime()
-    wet = 0
-    if use_water_sensor == "1":
-        if GPIO.input(22) > 0:
-            wet = 1
     sensor.heater = True
     time.sleep(1)
     sensor.heater = False
-    return [datetime_string, temp, humid, wet]
+    return [datetime_string, temp, humid]
+
+def wetness_polling(POLL, use_water_sensor):
+    time.sleep(3)
+    polls = 7
+    is_wet = 0
+    not_wet = 0
+    while polls > 0:
+        time.sleep(8)
+        if use_water_sensor == "1":
+            if GPIO.input(22) > 0:
+                is_wet = is_wet + 1
+            else:
+                not_wet = not_wet + 1
+        polls = polls - 1
+    if is_wet > not_wet:
+        return 1
+    else:
+        return 0
 
 def prepare_data(data,interval):
     total_temp = 0
@@ -29,6 +46,7 @@ def prepare_data(data,interval):
     total_wet_readings = 0
     polls = 0
     wet = 0
+    majority = interval * .75
     for reading in reversed(data):
         total_temp = total_temp + reading[1]
         total_humid = total_humid + reading[2]
@@ -39,7 +57,7 @@ def prepare_data(data,interval):
     avg_temp = round(total_temp / polls, 1)
     avg_humid = round(total_humid / polls, 1)
     datetime_string = onering.get_current_datetime()
-    if total_wet_readings > 0:
+    if total_wet_readings > majority:
         wet = total_wet_readings
     return datetime_string, avg_temp, avg_humid, wet
 
@@ -59,7 +77,7 @@ def alarm_check(data, temp_max, temp_min, humid_max, humid_min):
         status_message = "Min humid exceeded"
         status_code = 1
     if data[3] > 0:
-        status_message = f"Wet! (data[3])"
+        status_message = f"Wet! / Sensor Failure!"
         status_code = 1
     return [status_code, status_message]
 
@@ -91,6 +109,8 @@ def load_settings(settings_path):
     log_file = config.get('basics', 'log_file')
     log_length = int(config.get('basics', 'log_length'))
     use_water_sensor = config.get('basics', 'use_water_sensor')
+    temp_distortion = config.get('basics', 'temp_distortion')
+    humid_distortion = config.get('basics', 'humid_distortion')
     temp_max = config.get('boundaries', 'temp_max')
     temp_min = config.get('boundaries', 'temp_min')
     humid_max = config.get('boundaries', 'humid_max')
@@ -111,14 +131,16 @@ def load_settings(settings_path):
     if use_sms == "1":
         sms_contacts = key, [phone1, phone2, phone3]
     return log_file, log_length, temp_max, temp_min, humid_max, humid_min, \
-    slack_log_freq, slack_contacts, sms_contacts, key, use_water_sensor
+    slack_log_freq, slack_contacts, sms_contacts, key, use_water_sensor, \
+    temp_distortion, humid_distortion
 
 if __name__ == "__main__":
     #Config settings
     SETTINGS_PATH = '/var/www/dokuwiki/data/pages/settings.txt'
     log_file, log_length, temp_max, temp_min, humid_max, humid_min, \
     slack_log_freq, slack_contacts, sms_contacts, key, \
-    use_water_sensor = load_settings(SETTINGS_PATH)
+    use_water_sensor, temp_distortion, \
+    humid_distortion = load_settings(SETTINGS_PATH)
     POLL = 59 #seconds
     QUARTERHOUR = 15 #minutes
     HOUR = 60 #minutes
@@ -147,9 +169,12 @@ if __name__ == "__main__":
     while True:
         log_file, log_length, temp_max, temp_min, humid_max, humid_min, \
         slack_log_freq, slack_contacts, sms_contacts, key, \
-        use_water_sensor = load_settings(SETTINGS_PATH)
-        time.sleep(POLL) #Sleeping
-        results=sensor_reading(sensor, use_water_sensor) #Get data from sensor
+        use_water_sensor, temp_distortion, \
+        humid_distortion = load_settings(SETTINGS_PATH)
+        #time.sleep(POLL) #Sleeping
+        wet = wetness_polling(POLL, use_water_sensor) #Sleep and look for wetness
+        results=sensor_reading(sensor, temp_distortion, humid_distortion) #Get data from sensor
+        results.append(wet)
         sensor_data.append(results) #Add result to array
         timer = timer + 1
         log_rotate(log_file, log_length)
